@@ -7,3 +7,8 @@ edition = "2021"
 
 [dependencies]
 ach_lib_rs = {path = "./src/ach_lib_rs"}
+
+[workspace]
+members = [
+	"./src/ach_lib_rs"
+]
