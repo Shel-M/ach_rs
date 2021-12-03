@@ -7,10 +7,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-trait Record<T> {}
-
 #[derive(Debug)]
-struct AchError {}
+pub struct AchError {}
 
 fn checked_read_line(file: &mut BufReader<File>) -> Result<String, AchError> {
     let mut line = "".to_string();
@@ -52,10 +50,37 @@ impl Display for AchError {
 
 impl std::error::Error for AchError {}
 
-struct AchFile {
+#[derive(Debug)]
+pub struct AchFile {
     header: Header,
     records: Vec<CompanyBatch>,
     trailer: Trailer,
+}
+
+impl AchFile {
+    pub fn len(&self) -> usize {
+        let mut len = 2; // Start with +1 for each, header and footer
+        for record in &self.records {
+            len += record.len();
+        }
+        len
+    }
+}
+
+impl Display for AchFile {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}", self.header)?;
+        for record in &self.records {
+            writeln!(f, "{}", record)?;
+        }
+
+        writeln!(f, "{}", self.trailer)?;
+
+        for _ in 0..(10 - (self.len() % 10)) {
+            writeln!(f, "{}", "9".repeat(94))?;
+        }
+        write!(f, "")
+    }
 }
 
 impl TryFrom<&Path> for AchFile {
@@ -71,9 +96,13 @@ impl TryFrom<&Path> for AchFile {
             }
         });
 
-        let mut header = Header {..Default::default()};
+        let mut header = Header {
+            ..Default::default()
+        };
         let mut records: Vec<CompanyBatch> = vec![];
-        let mut trailer = Trailer {..Default::default()};
+        let mut trailer = Trailer {
+            ..Default::default()
+        };
 
         loop {
             let record_type_code = checked_read_type(&mut file)?;
@@ -83,19 +112,19 @@ impl TryFrom<&Path> for AchFile {
                 '5' => records.push(CompanyBatch::try_from(&mut file)?),
                 '9' => {
                     trailer = Trailer::try_from(&mut file)?;
-                    break // Assume end of file, break
-                },
+                    break; // Assume end of file, break
+                }
                 t => {
                     error!("Unrecognized record type code! found: {}", t);
                     return Err(AchError {});
                 }
             }
         }
-    
-        Ok(AchFile{
+
+        Ok(AchFile {
             header,
             records,
-            trailer
+            trailer,
         })
     }
 }
@@ -103,7 +132,7 @@ impl TryFrom<&Path> for AchFile {
 #[derive(Debug)]
 struct Field {
     content: String,
-    size: u32,
+    size: usize,
     left_justified: bool,
 }
 
@@ -112,6 +141,42 @@ impl Field {
         self.left_justified = justification;
         self
     }
+}
+
+impl PartialEq<&str> for Field {
+    fn eq(&self, other: &&str) -> bool {
+        self.content == *other
+    }
+}
+
+impl Display for Field {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut out = String::new();
+        if self.left_justified {
+            out.push_str(&*self.content);
+            for _ in 0..(self.size - self.content.len()) {
+                out.push(' ');
+            }
+        } else {
+            for _ in 0..(self.size - self.content.len()) {
+                out.push(' ');
+            }
+            out.push_str(&*self.content);
+        }
+
+        write!(f, "{}", out)
+    }
+}
+
+#[test]
+fn test_field_display() {
+    let mut field = Field::from("lorem ipsum dolor sit amet");
+    assert_eq!(format!("{}", field), "lorem ipsum dolor sit amet");
+
+    field.size = 30;
+    assert_eq!(format!("{}", field), "    lorem ipsum dolor sit amet");
+    field.left_justified = true;
+    assert_eq!(format!("{}", field), "lorem ipsum dolor sit amet    ")
 }
 
 impl Default for Field {
@@ -128,7 +193,7 @@ impl From<&str> for Field {
     fn from(content: &str) -> Self {
         Field {
             content: content.to_string(),
-            size: content.len() as u32,
+            size: content.len(),
             left_justified: false,
         }
     }
@@ -138,7 +203,7 @@ impl From<u32> for Field {
     fn from(size: u32) -> Self {
         Field {
             content: String::new(),
-            size,
+            size: size as usize,
             left_justified: false,
         }
     }
@@ -147,7 +212,7 @@ impl From<u32> for Field {
 impl From<String> for Field {
     fn from(string: String) -> Self {
         Self {
-            size: string.len() as u32,
+            size: string.len(),
             content: string,
             left_justified: false,
         }
@@ -171,7 +236,43 @@ struct Header {
     reference_code: Field,      // content: "", size: 8
 }
 
-impl Record<Header> for Header {}
+impl Display for Header {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.record_type_code)?;
+        write!(f, "{}", self.priority_code)?;
+        write!(f, "{}", self.immediate_dest)?;
+        write!(f, "{}", self.immediate_orig)?;
+        write!(f, "{}", self.file_creation_date)?;
+        write!(f, "{}", self.file_creation_time)?;
+        write!(f, "{}", self.file_id_modifier)?;
+        write!(f, "{}", self.record_size)?;
+        write!(f, "{}", self.blocking_factor)?;
+        write!(f, "{}", self.format_code)?;
+        write!(f, "{}", self.immediate_dest_name)?;
+        write!(f, "{}", self.immediate_orig_name)?;
+        write!(f, "{}", self.reference_code)
+    }
+}
+
+#[test]
+fn test_header_display() {
+    let header = Header {
+        record_type_code: Field::from("1"),
+        priority_code: Field::from("01"),
+        immediate_dest: Field::from("-imm_dest-"),
+        immediate_orig: Field::from("-imm_orig-"),
+        file_creation_date: Field::from("112233"),
+        file_creation_time: Field::from("1122"),
+        file_id_modifier: Field::from("1"),
+        record_size: Field::from("094"),
+        blocking_factor: Field::from("10"),
+        format_code: Field::from("1"),
+        immediate_dest_name: Field::from("-!immediate_dest_name!-"),
+        immediate_orig_name: Field::from("-!immediate_orig_name!-"),
+        reference_code: Field::from(8),
+    };
+    assert_eq!(format!("{}", header), "101-imm_dest--imm_orig-11223311221094101-!immediate_dest_name!--!immediate_orig_name!-        ")
+}
 
 impl From<StringReader> for Header {
     fn from(mut reader: StringReader) -> Self {
@@ -198,16 +299,38 @@ impl TryFrom<&mut BufReader<File>> for Header {
 
     fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
         info!("Trying to build Header from file");
-        
-        Ok(Header::from(StringReader::new(checked_read_line(&mut *file)?)))
+
+        Ok(Header::from(StringReader::new(checked_read_line(
+            &mut *file,
+        )?)))
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct CompanyBatch {
     batch_header: CompanyBatchHeader,
     batch_records: Vec<EntryDetail>,
     batch_trailer: CompanyBatchTrailer,
+}
+
+impl CompanyBatch {
+    fn len(&self) -> usize {
+        let mut len = 2; // +1 for header and footer
+        for record in &self.batch_records {
+            len += record.len()
+        }
+        len
+    }
+}
+
+impl Display for CompanyBatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}", self.batch_header)?;
+        for record in &self.batch_records {
+            writeln!(f, "{}", record)?;
+        }
+        write!(f, "{}", self.batch_trailer)
+    }
 }
 
 impl TryFrom<&mut BufReader<File>> for CompanyBatch {
@@ -218,9 +341,11 @@ impl TryFrom<&mut BufReader<File>> for CompanyBatch {
 
         let line = checked_read_line(&mut *file)?;
         let batch_header = CompanyBatchHeader::from(StringReader::new(line));
-        
+
         let mut batch_records: Vec<EntryDetail> = vec![];
-        let mut batch_trailer = CompanyBatchTrailer {..Default::default()};
+        let mut batch_trailer = CompanyBatchTrailer {
+            ..Default::default()
+        };
 
         loop {
             let record_type_code = checked_read_type(&mut *file)?;
@@ -243,7 +368,7 @@ impl TryFrom<&mut BufReader<File>> for CompanyBatch {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct CompanyBatchHeader {
     record_type_code: Field,           // content: "5", size: 1
     service_class_code: Field,         // size: 3
@@ -260,7 +385,24 @@ struct CompanyBatchHeader {
     batch_number: Field,               // size: 7
 }
 
-impl Record<CompanyBatchHeader> for CompanyBatchHeader {}
+impl Display for CompanyBatchHeader {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.record_type_code)?;
+        write!(f, "{}", self.service_class_code)?;
+        write!(f, "{}", self.company_name)?;
+        write!(f, "{}", self.company_discretionary_data)?;
+        write!(f, "{}", self.company_id)?;
+        write!(f, "{}", self.sec)?;
+        write!(f, "{}", self.entry_desc)?;
+        write!(f, "{}", self.company_descriptive_date)?;
+        write!(f, "{}", self.effective_entry_date)?;
+        write!(f, "{}", self.settlement_date)?;
+        write!(f, "{}", self.originator_status_code)?;
+        write!(f, "{}", self.odfi_id)?;
+        write!(f, "{}", self.batch_number)
+    }
+}
+
 impl From<StringReader> for CompanyBatchHeader {
     fn from(mut reader: StringReader) -> CompanyBatchHeader {
         CompanyBatchHeader {
@@ -281,7 +423,7 @@ impl From<StringReader> for CompanyBatchHeader {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct EntryDetail {
     record_type_code: Field,   // content: "6", size: 1
     transactions_code: Field,  // size: 2
@@ -298,7 +440,47 @@ struct EntryDetail {
     addenda: Vec<Addenda>,
 }
 
-impl Record<EntryDetail> for EntryDetail {}
+impl EntryDetail {
+    fn len(&self) -> usize {
+        let mut len = 1; // +1 for basic record
+        for _ in &self.addenda {
+            len += 1;
+        }
+        len
+    }
+}
+
+impl Display for EntryDetail {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.record_type_code)?;
+        write!(f, "{}", self.transactions_code)?;
+        write!(f, "{}", self.receiving_dfi_id)?;
+        write!(f, "{}", self.check_digit)?;
+        write!(f, "{}", self.dfi_account)?;
+        write!(f, "{}", self.amount)?;
+        write!(f, "{}", self.individual_id)?;
+        write!(f, "{}", self.individual_name)?;
+        write!(f, "{}", self.discretionary_data)?;
+        write!(f, "{}", self.addenda_indicator)?;
+        write!(f, "{}", self.trace)?;
+
+        if self.addenda_indicator == "1" {
+            writeln!(f, "")?;
+            let mut written = false;
+            for a in &self.addenda {
+                if written {
+                    writeln!(f, "")?;
+                }
+                else {
+                    written = true;
+                }
+                write!(f, "{}", a)?;
+            }
+        }
+
+        write!(f, "")
+    }
+}
 
 impl From<StringReader> for EntryDetail {
     fn from(mut reader: StringReader) -> EntryDetail {
@@ -347,7 +529,7 @@ impl TryFrom<&mut BufReader<File>> for EntryDetail {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Addenda {
     record_type_code: Field,     // content: "7", size: 1
     addenda_type: Field,         // size: 2
@@ -356,7 +538,15 @@ struct Addenda {
     batch: Field,                // size: 7
 }
 
-impl Record<Addenda> for Addenda {}
+impl Display for Addenda {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.record_type_code)?;
+        write!(f, "{}", self.addenda_type)?;
+        write!(f, "{}", self.payment_related_info)?;
+        write!(f, "{}", self.addenda_sequence)?;
+        write!(f, "{}", self.batch)
+    }
+}
 
 impl From<StringReader> for Addenda {
     fn from(mut reader: StringReader) -> Addenda {
@@ -382,7 +572,7 @@ impl TryFrom<&mut BufReader<File>> for Addenda {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct CompanyBatchTrailer {
     record_type_code: Field,        // content: "8", size: 1
     service_class_code: Field,      // size: 3
@@ -397,7 +587,21 @@ struct CompanyBatchTrailer {
     batch_num: Field,           // size: 7
 }
 
-impl Record<CompanyBatchTrailer> for CompanyBatchTrailer {}
+impl Display for CompanyBatchTrailer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.record_type_code)?;
+        write!(f, "{}", self.service_class_code)?;
+        write!(f, "{}", self.entry_and_addenda_count)?;
+        write!(f, "{}", self.entry_hash)?;
+        write!(f, "{}", self.total_debit_amount)?;
+        write!(f, "{}", self.total_credit_amount)?;
+        write!(f, "{}", self.company_id)?;
+        write!(f, "{}", self.message_auth_code)?;
+        write!(f, "{}", self.reserved)?;
+        write!(f, "{}", self.originating_dfi_id_num)?;
+        write!(f, "{}", self.batch_num)
+    }
+}
 
 impl From<StringReader> for CompanyBatchTrailer {
     fn from(mut reader: StringReader) -> CompanyBatchTrailer {
@@ -429,19 +633,30 @@ impl TryFrom<&mut BufReader<File>> for CompanyBatchTrailer {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Trailer {
     record_type_code: Field,        // content: "9", size: 1
     batch_count: Field,             // size: 6 (total count of [CompanyBatchHeader] records)
     block_count: Field,             // size: 6 (a block is defined as 10 records.)
     entry_and_addenda_count: Field, // size: 8 (sum of [EntryDetail] and [Addenda])
-    entry_hash: Field,              // size: 10 (todo: learn how this is derived )
+    entry_hash: Field,              // size: 10 (sum of [EntryDetail.receiving_dfi_id]s )
     total_debits: Field,            // size: 12 (sum of [EntryDetail.amount]s for debits)
     total_credits: Field,           // size: 12 (sum of [EntryDetail.amount]s for credits)
     reserved: Field,                // size: 39
 }
 
-impl Record<Trailer> for Trailer {}
+impl Display for Trailer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.record_type_code)?;
+        write!(f, "{}", self.batch_count)?;
+        write!(f, "{}", self.block_count)?;
+        write!(f, "{}", self.entry_and_addenda_count)?;
+        write!(f, "{}", self.entry_hash)?;
+        write!(f, "{}", self.total_debits)?;
+        write!(f, "{}", self.total_credits)?;
+        write!(f, "{}", self.reserved)
+    }
+}
 
 impl From<StringReader> for Trailer {
     fn from(mut reader: StringReader) -> Trailer {
@@ -460,10 +675,12 @@ impl From<StringReader> for Trailer {
 
 impl TryFrom<&mut BufReader<File>> for Trailer {
     type Error = AchError;
-    
+
     fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
         info!("Trying to build Trailer from file");
-    
-        Ok(Trailer::from(StringReader::new(checked_read_line(&mut *file)?)))
+
+        Ok(Trailer::from(StringReader::new(checked_read_line(
+            &mut *file,
+        )?)))
     }
 }
