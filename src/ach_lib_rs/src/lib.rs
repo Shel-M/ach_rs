@@ -1,2 +1,2 @@
-mod ach_file;
+pub mod ach_file;
 mod string_reader;

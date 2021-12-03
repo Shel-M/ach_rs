@@ -36,6 +36,7 @@ impl StringReader {
         self.inner.len()
     }
 
+    #[allow(unused)]
     pub fn seek(&mut self, pos: usize) {
         if pos > self.len() {
             self.pos = self.len();
