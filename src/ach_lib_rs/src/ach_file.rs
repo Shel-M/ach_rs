@@ -1,19 +1,46 @@
 // https://achdevguide.nacha.org/ach-file-details
 
-use log::error;
+use crate::string_reader::StringReader;
+use log::{error, info};
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
-//use std::io::prelude::*;
-use crate::string_reader::StringReader;
-use std::io::{self, BufRead};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-trait Record<T> {
-    fn new(mut reader: StringReader) -> T;
-}
+trait Record<T> {}
 
 #[derive(Debug)]
 struct AchError {}
+
+fn checked_read_line(file: &mut BufReader<File>) -> Result<String, AchError> {
+    let mut line = "".to_string();
+    match file.read_line(&mut line) {
+        Ok(s) => {
+            info!("Successfully read {} bytes to line", s)
+        }
+        Err(e) => {
+            error!("Could not read line: {}", e);
+            return Err(AchError {});
+        }
+    };
+
+    Ok(line)
+}
+
+fn checked_read_type(file: &mut BufReader<File>) -> Result<char, AchError> {
+    let mut record_type_code: [u8; 1] = [0];
+    match file.read_exact(&mut record_type_code) {
+        Ok(_) => {
+            info!("Successfully read record type code from file")
+        }
+        Err(e) => {
+            error!("Could not read record type code: {}", e);
+            return Err(AchError {});
+        }
+    };
+
+    Ok(record_type_code[0] as char)
+}
 
 impl Display for AchError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -31,44 +58,49 @@ struct AchFile {
     trailer: Trailer,
 }
 
-impl AchFile {
-    fn new(path: &Path) -> Result<Self, AchError> {
-        let file = io::BufReader::new(match File::open(path) {
+impl TryFrom<&Path> for AchFile {
+    type Error = AchError;
+
+    fn try_from(path: &Path) -> Result<Self, Self::Error> {
+        info!("Trying to create AchFile from file");
+        let mut file = BufReader::new(match File::open(path) {
             Ok(file) => file,
             Err(e) => {
                 error!("Could not open file: {}", e);
-                return Err(AchError {});
+                return Err(Self::Error {});
             }
-        })
-        .lines();
+        });
 
-        let mut ach = AchFile {
-            header: Default::default(),
-            records: vec![],
-            trailer: Default::default(),
-        };
+        let mut header = Header {..Default::default()};
+        let mut records: Vec<CompanyBatch> = vec![];
+        let mut trailer = Trailer {..Default::default()};
 
-        for line in file {
-            let mut line = StringReader::new(match line {
-                Ok(l) => l,
-                Err(e) => {
-                    error!("Error reading file: {}", e);
-                    panic!("Error reading file: {}", e);
+        loop {
+            let record_type_code = checked_read_type(&mut file)?;
+
+            match record_type_code {
+                '1' => header = Header::try_from(&mut file)?,
+                '5' => records.push(CompanyBatch::try_from(&mut file)?),
+                '9' => {
+                    trailer = Trailer::try_from(&mut file)?;
+                    break // Assume end of file, break
+                },
+                t => {
+                    error!("Unrecognized record type code! found: {}", t);
+                    return Err(AchError {});
                 }
-            });
-
-            match &*line.read(1) {
-                "1" => {
-                    Header::new(line);
-                }
-                _ => {}
-            };
+            }
         }
-
-        todo!("complete this function")
+    
+        Ok(AchFile{
+            header,
+            records,
+            trailer
+        })
     }
 }
 
+#[derive(Debug)]
 struct Field {
     content: String,
     size: u32,
@@ -76,8 +108,9 @@ struct Field {
 }
 
 impl Field {
-    fn left_just(mut self, justification: bool) -> self {
-        self.left_justified = justification
+    fn left_just(mut self, justification: bool) -> Self {
+        self.left_justified = justification;
+        self
     }
 }
 
@@ -121,7 +154,7 @@ impl From<String> for Field {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Header {
     record_type_code: Field,    // content: "1", size: 1
     priority_code: Field,       // content:  "01", size: 2
@@ -138,8 +171,10 @@ struct Header {
     reference_code: Field,      // content: "", size: 8
 }
 
-impl Record<Header> for Header {
-    fn new(mut reader: StringReader) -> Header {
+impl Record<Header> for Header {}
+
+impl From<StringReader> for Header {
+    fn from(mut reader: StringReader) -> Self {
         Header {
             record_type_code: Field::from("1"),
             priority_code: Field::from(reader.read(2)),
@@ -148,13 +183,23 @@ impl Record<Header> for Header {
             file_creation_date: Field::from(reader.read(6)),
             file_creation_time: Field::from(reader.read(4)),
             file_id_modifier: Field::from(reader.read(1)),
-            record_size: Field::from("094"),
-            blocking_factor: Field::from("10"),
-            format_code: Field::from("10"),
+            record_size: Field::from(reader.read(3)),
+            blocking_factor: Field::from(reader.read(2)),
+            format_code: Field::from(reader.read(1)),
             immediate_dest_name: Field::from(reader.read(23)),
             immediate_orig_name: Field::from(reader.read(23)),
-            reference_code: Field::new_empty(8),
+            reference_code: Field::from(8),
         }
+    }
+}
+
+impl TryFrom<&mut BufReader<File>> for Header {
+    type Error = AchError;
+
+    fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
+        info!("Trying to build Header from file");
+        
+        Ok(Header::from(StringReader::new(checked_read_line(&mut *file)?)))
     }
 }
 
@@ -163,6 +208,39 @@ struct CompanyBatch {
     batch_header: CompanyBatchHeader,
     batch_records: Vec<EntryDetail>,
     batch_trailer: CompanyBatchTrailer,
+}
+
+impl TryFrom<&mut BufReader<File>> for CompanyBatch {
+    type Error = AchError;
+
+    fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
+        info!("Trying to build CompanyBatch from file");
+
+        let line = checked_read_line(&mut *file)?;
+        let batch_header = CompanyBatchHeader::from(StringReader::new(line));
+        
+        let mut batch_records: Vec<EntryDetail> = vec![];
+        let mut batch_trailer = CompanyBatchTrailer {..Default::default()};
+
+        loop {
+            let record_type_code = checked_read_type(&mut *file)?;
+
+            match record_type_code {
+                '6' => batch_records.push(EntryDetail::try_from(&mut *file)?),
+                '8' => batch_trailer = CompanyBatchTrailer::try_from(&mut *file)?,
+                _ => {
+                    file.seek_relative(-1).unwrap();
+                    break;
+                }
+            }
+        }
+
+        Ok(CompanyBatch {
+            batch_header,
+            batch_records,
+            batch_trailer,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -182,8 +260,9 @@ struct CompanyBatchHeader {
     batch_number: Field,               // size: 7
 }
 
-impl Record<CompanyBatchHeader> for CompanyBatchHeader {
-    fn new(mut reader: StringReader) -> CompanyBatchHeader {
+impl Record<CompanyBatchHeader> for CompanyBatchHeader {}
+impl From<StringReader> for CompanyBatchHeader {
+    fn from(mut reader: StringReader) -> CompanyBatchHeader {
         CompanyBatchHeader {
             record_type_code: Field::from("5"),
             service_class_code: Field::from(reader.read(3)),
@@ -215,10 +294,14 @@ struct EntryDetail {
     discretionary_data: Field, // size: 2
     addenda_indicator: Field,  // size: 1
     trace: Field,              // size: 15
+
+    addenda: Vec<Addenda>,
 }
 
-impl Record<EntryDetail> for EntryDetail {
-    fn new(mut reader: StringReader) -> EntryDetail {
+impl Record<EntryDetail> for EntryDetail {}
+
+impl From<StringReader> for EntryDetail {
+    fn from(mut reader: StringReader) -> EntryDetail {
         EntryDetail {
             record_type_code: Field::from("6"),
             transactions_code: Field::from(reader.read(2)),
@@ -231,7 +314,36 @@ impl Record<EntryDetail> for EntryDetail {
             discretionary_data: Field::from(reader.read(2)),
             addenda_indicator: Field::from(reader.read(1)),
             trace: Field::from(reader.read(15)),
+
+            addenda: vec![],
         }
+    }
+}
+
+impl TryFrom<&mut BufReader<File>> for EntryDetail {
+    type Error = AchError;
+
+    fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
+        info!("Trying to build EntryDetail from file");
+
+        let line = checked_read_line(&mut *file)?;
+        let mut entry_detail = EntryDetail::from(StringReader::new(line));
+
+        let mut addenda_vec: Vec<Addenda> = vec![];
+        loop {
+            let record_type_code = checked_read_type(&mut *file)?;
+
+            match record_type_code {
+                '7' => addenda_vec.push(Addenda::try_from(&mut *file)?),
+                _ => {
+                    file.seek_relative(-1).unwrap();
+                    break;
+                }
+            }
+        }
+
+        entry_detail.addenda.append(&mut addenda_vec);
+        Ok(entry_detail)
     }
 }
 
@@ -244,8 +356,10 @@ struct Addenda {
     batch: Field,                // size: 7
 }
 
-impl Record<Addenda> for Addenda {
-    fn new(mut reader: StringReader) -> Addenda {
+impl Record<Addenda> for Addenda {}
+
+impl From<StringReader> for Addenda {
+    fn from(mut reader: StringReader) -> Addenda {
         Addenda {
             record_type_code: Field::from("7"),
             addenda_type: Field::from(reader.read(2)),
@@ -253,6 +367,18 @@ impl Record<Addenda> for Addenda {
             addenda_sequence: Field::from(reader.read(4)),
             batch: Field::from(reader.read(7)),
         }
+    }
+}
+
+impl TryFrom<&mut BufReader<File>> for Addenda {
+    type Error = AchError;
+
+    fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
+        info!("Trying to build Addenda from file");
+
+        Ok(Addenda::from(StringReader::new(checked_read_line(
+            &mut *file,
+        )?)))
     }
 }
 
@@ -271,8 +397,10 @@ struct CompanyBatchTrailer {
     batch_num: Field,           // size: 7
 }
 
-impl Record<CompanyBatchTrailer> for CompanyBatchTrailer {
-    fn new(mut reader: StringReader) -> CompanyBatchTrailer {
+impl Record<CompanyBatchTrailer> for CompanyBatchTrailer {}
+
+impl From<StringReader> for CompanyBatchTrailer {
+    fn from(mut reader: StringReader) -> CompanyBatchTrailer {
         CompanyBatchTrailer {
             record_type_code: Field::from("8"),
             service_class_code: Field::from(reader.read(3)),
@@ -284,8 +412,20 @@ impl Record<CompanyBatchTrailer> for CompanyBatchTrailer {
             message_auth_code: Field::from(reader.read(19)),
             reserved: Field::from(reader.read(6)),
             originating_dfi_id_num: Field::from(reader.read(8)),
-            batch_num: Field::from(reader.read(7)),           // size: 7
+            batch_num: Field::from(reader.read(7)), // size: 7
         }
+    }
+}
+
+impl TryFrom<&mut BufReader<File>> for CompanyBatchTrailer {
+    type Error = AchError;
+
+    fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
+        info!("Trying to build CompanyBatchTrailer from file");
+
+        Ok(CompanyBatchTrailer::from(StringReader::new(
+            checked_read_line(&mut *file)?,
+        )))
     }
 }
 
@@ -301,8 +441,10 @@ struct Trailer {
     reserved: Field,                // size: 39
 }
 
-impl Record<Trailer> for Trailer {
-    fn new(mut reader: StringReader) -> Trailer {
+impl Record<Trailer> for Trailer {}
+
+impl From<StringReader> for Trailer {
+    fn from(mut reader: StringReader) -> Trailer {
         Trailer {
             record_type_code: Field::from("9"),
             batch_count: Field::from(reader.read(6)),
@@ -313,5 +455,15 @@ impl Record<Trailer> for Trailer {
             total_credits: Field::from(reader.read(12)),
             reserved: Field::from(reader.read(39)),
         }
+    }
+}
+
+impl TryFrom<&mut BufReader<File>> for Trailer {
+    type Error = AchError;
+    
+    fn try_from(file: &mut BufReader<File>) -> Result<Self, Self::Error> {
+        info!("Trying to build Trailer from file");
+    
+        Ok(Trailer::from(StringReader::new(checked_read_line(&mut *file)?)))
     }
 }
