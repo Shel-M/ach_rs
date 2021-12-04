@@ -50,11 +50,60 @@ impl Display for AchError {
 
 impl std::error::Error for AchError {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AchFile {
     header: Header,
     records: Vec<CompanyBatch>,
     trailer: Trailer,
+}
+
+#[test]
+fn test_achfile_clone() {
+    let ach1 = AchFile {
+        header: Header {
+            record_type_code: Default::default(),
+            priority_code: Default::default(),
+            immediate_dest: Field::from("-test_case1-"),
+            immediate_orig: Default::default(),
+            file_creation_date: Default::default(),
+            file_creation_time: Default::default(),
+            file_id_modifier: Default::default(),
+            record_size: Default::default(),
+            blocking_factor: Default::default(),
+            format_code: Default::default(),
+            immediate_dest_name: Default::default(),
+            immediate_orig_name: Default::default(),
+            reference_code: Default::default()
+        },
+        records: vec![CompanyBatch {
+            batch_header: Default::default(),
+            batch_records: vec![EntryDetail{
+                record_type_code: Default::default(),
+                transactions_code: Default::default(),
+                receiving_dfi_id: Field::from("-test_case2-"),
+                check_digit: Default::default(),
+                dfi_account: Default::default(),
+                amount: Default::default(),
+                individual_id: Default::default(),
+                individual_name: Default::default(),
+                discretionary_data: Default::default(),
+                addenda_indicator: Default::default(),
+                trace: Default::default(),
+                addenda: vec![Addenda {
+                    record_type_code: Default::default(),
+                    addenda_type: Default::default(),
+                    payment_related_info: Field::from("-test_case3-"),
+                    addenda_sequence: Default::default(),
+                    batch: Default::default()
+                }]
+            }],
+            batch_trailer: Default::default()
+        }],
+        trailer: Default::default()
+    };
+    let ach2 = ach1.clone();
+    
+    assert_eq!(format!("{:?}", ach1), format!("{:?}", ach2))
 }
 
 impl AchFile {
@@ -100,9 +149,7 @@ impl TryFrom<&Path> for AchFile {
             ..Default::default()
         };
         let mut records: Vec<CompanyBatch> = vec![];
-        let mut trailer = Trailer {
-            ..Default::default()
-        };
+        let trailer;
 
         loop {
             let record_type_code = checked_read_type(&mut file)?;
@@ -129,7 +176,7 @@ impl TryFrom<&Path> for AchFile {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Field {
     content: String,
     size: usize,
@@ -219,7 +266,7 @@ impl From<String> for Field {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct Header {
     record_type_code: Field,    // content: "1", size: 1
     priority_code: Field,       // content:  "01", size: 2
@@ -306,7 +353,7 @@ impl TryFrom<&mut BufReader<File>> for Header {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct CompanyBatch {
     batch_header: CompanyBatchHeader,
     batch_records: Vec<EntryDetail>,
@@ -368,7 +415,7 @@ impl TryFrom<&mut BufReader<File>> for CompanyBatch {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct CompanyBatchHeader {
     record_type_code: Field,           // content: "5", size: 1
     service_class_code: Field,         // size: 3
@@ -423,7 +470,7 @@ impl From<StringReader> for CompanyBatchHeader {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct EntryDetail {
     record_type_code: Field,   // content: "6", size: 1
     transactions_code: Field,  // size: 2
@@ -529,7 +576,7 @@ impl TryFrom<&mut BufReader<File>> for EntryDetail {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct Addenda {
     record_type_code: Field,     // content: "7", size: 1
     addenda_type: Field,         // size: 2
@@ -572,19 +619,19 @@ impl TryFrom<&mut BufReader<File>> for Addenda {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct CompanyBatchTrailer {
     record_type_code: Field,        // content: "8", size: 1
     service_class_code: Field,      // size: 3
     entry_and_addenda_count: Field, // size: 6  (sum of [EntryDetail] and [Addenda] since [CompanyBatchHeader])
-    entry_hash: Field, // size: 10 (Sum of each [EntryDetail.receiving_dfi_id], left justify)
-    total_debit_amount: Field, // size: 12 (Sum of [EntryDetail.amount]s for debits since [CompanyBatchHeader])
-    total_credit_amount: Field, // size: 12 (Sum of [EntryDetail.amount]s for credits since [CompanyBatchHeader])
-    company_id: Field,          // size: 10
-    message_auth_code: Field,   // size: 19
-    reserved: Field,            // size: 6
-    originating_dfi_id_num: Field, // size: 8
-    batch_num: Field,           // size: 7
+    entry_hash: Field,              // size: 10 (Sum of each [EntryDetail.receiving_dfi_id], left justify)
+    total_debit_amount: Field,      // size: 12 (Sum of [EntryDetail.amount]s for debits since [CompanyBatchHeader])
+    total_credit_amount: Field,     // size: 12 (Sum of [EntryDetail.amount]s for credits since [CompanyBatchHeader])
+    company_id: Field,              // size: 10
+    message_auth_code: Field,       // size: 19
+    reserved: Field,                // size: 6
+    originating_dfi_id_num: Field,  // size: 8
+    batch_num: Field,               // size: 7
 }
 
 impl Display for CompanyBatchTrailer {
@@ -608,7 +655,7 @@ impl From<StringReader> for CompanyBatchTrailer {
         CompanyBatchTrailer {
             record_type_code: Field::from("8"),
             service_class_code: Field::from(reader.read(3)),
-            entry_and_addenda_count: Field::from(reader.read(3)),
+            entry_and_addenda_count: Field::from(reader.read(6)),
             entry_hash: Field::from(reader.read(10)).left_just(true),
             total_debit_amount: Field::from(reader.read(12)),
             total_credit_amount: Field::from(reader.read(12)),
@@ -616,7 +663,7 @@ impl From<StringReader> for CompanyBatchTrailer {
             message_auth_code: Field::from(reader.read(19)),
             reserved: Field::from(reader.read(6)),
             originating_dfi_id_num: Field::from(reader.read(8)),
-            batch_num: Field::from(reader.read(7)), // size: 7
+            batch_num: Field::from(reader.read(7)),
         }
     }
 }
@@ -633,7 +680,7 @@ impl TryFrom<&mut BufReader<File>> for CompanyBatchTrailer {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct Trailer {
     record_type_code: Field,        // content: "9", size: 1
     batch_count: Field,             // size: 6 (total count of [CompanyBatchHeader] records)
