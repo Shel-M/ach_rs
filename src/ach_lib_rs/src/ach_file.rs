@@ -114,6 +114,31 @@ impl AchFile {
         }
         len
     }
+    
+    pub fn split(&self, company_ids: Vec<String>) -> Result<(AchFile, AchFile), AchError> {
+        let ach_files = (AchFile::default(), AchFile::default());
+        
+        for company_batch in &self.records {
+            if company_ids.contains(&company_batch.batch_header.company_id.content) {
+                println!("found company id {}", company_batch.batch_header.company_id)
+            }
+            else {
+                //println!("company id {} does not match any of {:?}", company_batch.batch_header.company_id, company_ids)
+            }
+        }
+        
+        Ok(ach_files)
+    }
+}
+
+impl Default for AchFile {
+    fn default() -> Self {
+        AchFile {
+            header: Default::default(),
+            records: vec![],
+            trailer: Default::default()
+        }
+    }
 }
 
 impl Display for AchFile {
