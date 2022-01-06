@@ -24,12 +24,7 @@ fn main() -> io::Result<()>{
         
         for operation in operations {
             print!("performing operation {} ", operation.label);
-            match operation.op {
-                Operation::CSplit => {
-                    println!("company split");
-                    let _ = ach.split(operation.arg);
-                }
-            }
+            // todo: Handle operations
         }
     }
     
