@@ -10,6 +10,18 @@ use std::path::Path;
 #[derive(Debug)]
 pub struct AchError {}
 
+pub trait AchRecord: std::fmt::Debug {}
+
+#[derive(Debug)]
+pub(crate) enum AchRecordType {
+    Header,
+    CompanyBatchHeader,
+    EntryDetail,
+    Addenda,
+    CompanyBatchTrailer,
+    Trailer,
+}
+
 fn checked_read_line(file: &mut BufReader<File>) -> Result<String, AchError> {
     let mut line = "".to_string();
     match file.read_line(&mut line) {
@@ -73,11 +85,11 @@ fn test_achfile_clone() {
             format_code: Default::default(),
             immediate_dest_name: Default::default(),
             immediate_orig_name: Default::default(),
-            reference_code: Default::default()
+            reference_code: Default::default(),
         },
         records: vec![CompanyBatch {
             batch_header: Default::default(),
-            batch_records: vec![EntryDetail{
+            batch_records: vec![EntryDetail {
                 record_type_code: Default::default(),
                 transactions_code: Default::default(),
                 receiving_dfi_id: Field::from("-test_case2-"),
@@ -94,15 +106,15 @@ fn test_achfile_clone() {
                     addenda_type: Default::default(),
                     payment_related_info: Field::from("-test_case3-"),
                     addenda_sequence: Default::default(),
-                    batch: Default::default()
-                }]
+                    batch: Default::default(),
+                }],
             }],
-            batch_trailer: Default::default()
+            batch_trailer: Default::default(),
         }],
-        trailer: Default::default()
+        trailer: Default::default(),
     };
     let ach2 = ach1.clone();
-    
+
     assert_eq!(format!("{:?}", ach1), format!("{:?}", ach2))
 }
 
@@ -114,19 +126,20 @@ impl AchFile {
         }
         len
     }
-    
+
     pub fn split(&self, company_ids: Vec<String>) -> Result<(AchFile, AchFile), AchError> {
-        let ach_files = (AchFile::default(), AchFile::default());
-        
+        let mut ach_files = (AchFile::default(), AchFile::default());
+        ach_files.0.header = self.header.clone();
+        ach_files.1.header = self.header.clone();
+
         for company_batch in &self.records {
             if company_ids.contains(&company_batch.batch_header.company_id.content) {
                 println!("found company id {}", company_batch.batch_header.company_id)
-            }
-            else {
+            } else {
                 //println!("company id {} does not match any of {:?}", company_batch.batch_header.company_id, company_ids)
             }
         }
-        
+
         Ok(ach_files)
     }
 }
@@ -136,7 +149,7 @@ impl Default for AchFile {
         AchFile {
             header: Default::default(),
             records: vec![],
-            trailer: Default::default()
+            trailer: Default::default(),
         }
     }
 }
@@ -202,7 +215,7 @@ impl TryFrom<&Path> for AchFile {
 }
 
 #[derive(Debug, Clone)]
-struct Field {
+pub(crate) struct Field {
     content: String,
     size: usize,
     left_justified: bool,
@@ -292,7 +305,7 @@ impl From<String> for Field {
 }
 
 #[derive(Default, Debug, Clone)]
-struct Header {
+pub(crate) struct Header {
     record_type_code: Field,    // content: "1", size: 1
     priority_code: Field,       // content:  "01", size: 2
     immediate_dest: Field,      // size: 10
@@ -307,6 +320,8 @@ struct Header {
     immediate_orig_name: Field, // size: 23
     reference_code: Field,      // content: "", size: 8
 }
+
+impl AchRecord for Header {}
 
 impl Display for Header {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -379,7 +394,7 @@ impl TryFrom<&mut BufReader<File>> for Header {
 }
 
 #[derive(Default, Debug, Clone)]
-struct CompanyBatch {
+pub(crate) struct CompanyBatch {
     batch_header: CompanyBatchHeader,
     batch_records: Vec<EntryDetail>,
     batch_trailer: CompanyBatchTrailer,
@@ -441,7 +456,7 @@ impl TryFrom<&mut BufReader<File>> for CompanyBatch {
 }
 
 #[derive(Default, Debug, Clone)]
-struct CompanyBatchHeader {
+pub(crate) struct CompanyBatchHeader {
     record_type_code: Field,           // content: "5", size: 1
     service_class_code: Field,         // size: 3
     company_name: Field,               // size: 16
@@ -456,6 +471,8 @@ struct CompanyBatchHeader {
     odfi_id: Field,                    // size: 8
     batch_number: Field,               // size: 7
 }
+
+impl AchRecord for CompanyBatchHeader {}
 
 impl Display for CompanyBatchHeader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -496,7 +513,7 @@ impl From<StringReader> for CompanyBatchHeader {
 }
 
 #[derive(Default, Debug, Clone)]
-struct EntryDetail {
+pub(crate) struct EntryDetail {
     record_type_code: Field,   // content: "6", size: 1
     transactions_code: Field,  // size: 2
     receiving_dfi_id: Field,   // size: 8
@@ -511,6 +528,8 @@ struct EntryDetail {
 
     addenda: Vec<Addenda>,
 }
+
+impl AchRecord for EntryDetail {}
 
 impl EntryDetail {
     fn len(&self) -> usize {
@@ -542,8 +561,7 @@ impl Display for EntryDetail {
             for a in &self.addenda {
                 if written {
                     writeln!(f, "")?;
-                }
-                else {
+                } else {
                     written = true;
                 }
                 write!(f, "{}", a)?;
@@ -602,13 +620,15 @@ impl TryFrom<&mut BufReader<File>> for EntryDetail {
 }
 
 #[derive(Default, Debug, Clone)]
-struct Addenda {
+pub(crate) struct Addenda {
     record_type_code: Field,     // content: "7", size: 1
     addenda_type: Field,         // size: 2
     payment_related_info: Field, // size: 80
     addenda_sequence: Field,     // size: 4
     batch: Field,                // size: 7
 }
+
+impl AchRecord for Addenda {}
 
 impl Display for Addenda {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -645,19 +665,21 @@ impl TryFrom<&mut BufReader<File>> for Addenda {
 }
 
 #[derive(Default, Debug, Clone)]
-struct CompanyBatchTrailer {
+pub(crate) struct CompanyBatchTrailer {
     record_type_code: Field,        // content: "8", size: 1
     service_class_code: Field,      // size: 3
     entry_and_addenda_count: Field, // size: 6  (sum of [EntryDetail] and [Addenda] since [CompanyBatchHeader])
-    entry_hash: Field,              // size: 10 (Sum of each [EntryDetail.receiving_dfi_id], left justify)
-    total_debit_amount: Field,      // size: 12 (Sum of [EntryDetail.amount]s for debits since [CompanyBatchHeader])
-    total_credit_amount: Field,     // size: 12 (Sum of [EntryDetail.amount]s for credits since [CompanyBatchHeader])
-    company_id: Field,              // size: 10
-    message_auth_code: Field,       // size: 19
-    reserved: Field,                // size: 6
-    originating_dfi_id_num: Field,  // size: 8
-    batch_num: Field,               // size: 7
+    entry_hash: Field, // size: 10 (Sum of each [EntryDetail.receiving_dfi_id], left justify)
+    total_debit_amount: Field, // size: 12 (Sum of [EntryDetail.amount]s for debits since [CompanyBatchHeader])
+    total_credit_amount: Field, // size: 12 (Sum of [EntryDetail.amount]s for credits since [CompanyBatchHeader])
+    company_id: Field,          // size: 10
+    message_auth_code: Field,   // size: 19
+    reserved: Field,            // size: 6
+    originating_dfi_id_num: Field, // size: 8
+    batch_num: Field,           // size: 7
 }
+
+impl AchRecord for CompanyBatchTrailer {}
 
 impl Display for CompanyBatchTrailer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -706,7 +728,7 @@ impl TryFrom<&mut BufReader<File>> for CompanyBatchTrailer {
 }
 
 #[derive(Default, Debug, Clone)]
-struct Trailer {
+pub(crate) struct Trailer {
     record_type_code: Field,        // content: "9", size: 1
     batch_count: Field,             // size: 6 (total count of [CompanyBatchHeader] records)
     block_count: Field,             // size: 6 (a block is defined as 10 records.)
@@ -716,6 +738,8 @@ struct Trailer {
     total_credits: Field,           // size: 12 (sum of [EntryDetail.amount]s for credits)
     reserved: Field,                // size: 39
 }
+
+impl AchRecord for Trailer {}
 
 impl Display for Trailer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
