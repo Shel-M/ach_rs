@@ -20,6 +20,21 @@ pub(crate) enum AchRecordType {
     Addenda,
     CompanyBatchTrailer,
     Trailer,
+    Unknown, // Only really used for defaults and the From<&str> impl
+}
+
+impl From<&str> for AchRecordType {
+    fn from(s: &str) -> Self {
+        match s {
+            "Header" => AchRecordType::Header,
+            "CompanyBatchHeader" => AchRecordType::CompanyBatchHeader,
+            "EntryDetail" => AchRecordType::EntryDetail,
+            "Addenda" => AchRecordType::Addenda,
+            "CompanyBatchTrailer" => AchRecordType::CompanyBatchTrailer,
+            "Trailer" => AchRecordType::Trailer,
+            _ => AchRecordType::Unknown,
+        }
+    }
 }
 
 fn checked_read_line(file: &mut BufReader<File>) -> Result<String, AchError> {
