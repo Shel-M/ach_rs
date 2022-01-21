@@ -69,15 +69,13 @@ fn checked_read_type(file: &mut BufReader<File>) -> Result<char, AchError> {
 
 impl Display for AchError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            _ => write!(f, "ach error"),
-        }
+        write!(f, "ach error")
     }
 }
 
 impl std::error::Error for AchError {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AchFile {
     header: Header,
     records: Vec<CompanyBatch>,
@@ -141,6 +139,10 @@ impl AchFile {
         }
         len
     }
+    
+    pub fn is_empty(&self) -> bool {
+        false
+    }
 
     pub fn split(&self, company_ids: Vec<String>) -> Result<(AchFile, AchFile), AchError> {
         let mut ach_files = (AchFile::default(), AchFile::default());
@@ -159,7 +161,7 @@ impl AchFile {
     }
 }
 
-impl Default for AchFile {
+/*impl Default for AchFile {
     fn default() -> Self {
         AchFile {
             header: Default::default(),
@@ -167,7 +169,7 @@ impl Default for AchFile {
             trailer: Default::default(),
         }
     }
-}
+}*/
 
 impl Display for AchFile {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -571,11 +573,11 @@ impl Display for EntryDetail {
         write!(f, "{}", self.trace)?;
 
         if self.addenda_indicator == "1" {
-            writeln!(f, "")?;
+            writeln!(f)?;
             let mut written = false;
             for a in &self.addenda {
                 if written {
-                    writeln!(f, "")?;
+                    writeln!(f)?;
                 } else {
                     written = true;
                 }
